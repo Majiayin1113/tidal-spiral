@@ -1,9 +1,9 @@
-# Enhanced Rainfall Map with Animation and Interactive City Selection
-import requests
+# Animated Bubble Chart of Monthly Rainfall by City on World Map
 import matplotlib.pyplot as plt
-from mpl_toolkits.basemap import Basemap
 import matplotlib.animation as animation
 import numpy as np
+import cartopy.crs as ccrs
+import cartopy.feature as cfeature
 
 # Placeholder: Replace with actual data fetching from website
 cities = [
@@ -18,25 +18,34 @@ rainfall_series = {
     city[0]: np.abs(np.sin(np.linspace(0, 2*np.pi, 12)) * city[3] * np.random.uniform(0.8, 1.2, 12)) for city in cities
 }
 
-fig, ax = plt.subplots(figsize=(10,7))
-m = Basemap(projection='merc',llcrnrlat=-60,urcrnrlat=80,llcrnrlon=-180,urcrnrlon=180,resolution='c', ax=ax)
-m.drawcoastlines()
-m.drawcountries()
-
-scatters = []
+months = [f'{i+1}月' for i in range(12)]
 colors = ['#1f77b4', '#2ca02c', '#d62728', '#9467bd']
+
+fig = plt.figure(figsize=(12,8))
+ax = plt.axes(projection=ccrs.PlateCarree())
+ax.set_global()
+ax.coastlines(linewidth=1.2)
+ax.add_feature(cfeature.BORDERS, linewidth=0.8)
+ax.add_feature(cfeature.LAND, facecolor='#f7f7f7')
+ax.add_feature(cfeature.OCEAN, facecolor='#a2cffe')
 
 def animate(month):
     ax.clear()
-    m.drawcoastlines()
-    m.drawcountries()
+    ax.set_global()
+    ax.coastlines(linewidth=1.2)
+    ax.add_feature(cfeature.BORDERS, linewidth=0.8)
+    ax.add_feature(cfeature.LAND, facecolor='#f7f7f7')
+    ax.add_feature(cfeature.OCEAN, facecolor='#a2cffe')
     for i, city in enumerate(cities):
         lat, lon = city[1], city[2]
         rainfall = rainfall_series[city[0]][month]
-        x, y = m(lon, lat)
-        ax.scatter(x, y, s=rainfall/4, c=colors[i], alpha=0.7, label=f'{city[0]}: {int(rainfall)}mm')
+        ax.scatter(lon, lat, s=rainfall/2, c=colors[i], alpha=0.7, edgecolors='black', linewidths=1.5,
+                   label=f'{city[0]}: {int(rainfall)}mm', transform=ccrs.PlateCarree(), zorder=5)
+        ax.text(lon, lat, city[0], fontsize=12, color=colors[i], transform=ccrs.PlateCarree(), zorder=6, ha='center', va='bottom')
     ax.legend(loc='lower left')
-    ax.set_title(f'Rainfall by City - Month {month+1}')
+    ax.set_title(f'🌏 世界城市月降雨量气泡图 - {months[month]}', fontsize=20, color='#22223B', pad=20)
+    ax.text(0.5, -0.08, '气泡大小表示降雨量，数据为模拟，仅供展示', fontsize=13, color='#22223B', ha='center', va='center', transform=ax.transAxes)
 
 ani = animation.FuncAnimation(fig, animate, frames=12, interval=800, repeat=True)
+plt.tight_layout()
 plt.show()
