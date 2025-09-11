@@ -1,5 +1,7 @@
-# Animated Bubble Chart of Monthly Rainfall by City on World Map
+# Enhanced Rainfall Map with Animation and Interactive City Selection
+import requests
 import matplotlib.pyplot as plt
+from mpl_toolkits.basemap import Basemap
 import matplotlib.animation as animation
 import numpy as np
 import cartopy.crs as ccrs
