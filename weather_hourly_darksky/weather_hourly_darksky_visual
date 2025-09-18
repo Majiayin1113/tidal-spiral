@@ -1,0 +1,65 @@
+# 可交互主趋势折线图（Plotly）
+import pandas as pd
+import plotly.graph_objs as go
+import plotly.io as pio
+
+# 读取数据
+df = pd.read_csv('weather_hourly_darksky.csv')
+
+# 时间格式化
+df['time'] = pd.to_datetime(df['time'])
+
+# 指标及颜色
+indicators = {
+	'temperature': {'name': '温度 (°C)', 'color': 'orange'},
+	'humidity': {'name': '湿度', 'color': 'blue'},
+	'windSpeed': {'name': '风速 (m/s)', 'color': 'green'},
+	'precipType': {'name': '降水概率', 'color': 'purple'}
+}
+
+# 处理降水概率（如果有precipProbability字段则用，否则用precipType是否为rain/snow等做0/1）
+if 'precipProbability' in df.columns:
+	df['precip'] = df['precipProbability']
+else:
+	df['precip'] = df['precipType'].apply(lambda x: 1 if str(x).strip().lower() in ['rain','snow','sleet','hail'] else 0)
+
+# 构建 traces
+traces = []
+traces.append(go.Scatter(x=df['time'], y=df['temperature'], mode='lines', name='温度', line=dict(color='orange')))
+traces.append(go.Scatter(x=df['time'], y=df['humidity'], mode='lines', name='湿度', line=dict(color='blue')))
+traces.append(go.Scatter(x=df['time'], y=df['windSpeed'], mode='lines', name='风速', line=dict(color='green')))
+traces.append(go.Scatter(x=df['time'], y=df['precip'], mode='lines', name='降水概率', line=dict(color='purple')))
+
+# 按钮切换
+updatemenus = [
+	dict(
+		type="buttons",
+		direction="right",
+		x=0.5,
+		y=1.15,
+		showactive=True,
+		buttons=list([
+			dict(label="全部", method="update", args=[{"visible": [True, True, True, True]}, {"title": "全部趋势"}]),
+			dict(label="温度", method="update", args=[{"visible": [True, False, False, False]}, {"title": "温度趋势"}]),
+			dict(label="湿度", method="update", args=[{"visible": [False, True, False, False]}, {"title": "湿度趋势"}]),
+			dict(label="风速", method="update", args=[{"visible": [False, False, True, False]}, {"title": "风速趋势"}]),
+			dict(label="降水概率", method="update", args=[{"visible": [False, False, False, True]}, {"title": "降水概率趋势"}]),
+		]),
+		pad={"r": 10, "t": 10},
+		xanchor="center",
+		yanchor="top"
+	)
+]
+
+layout = go.Layout(
+	title="天气核心趋势（可切换）",
+	xaxis=dict(title="时间"),
+	yaxis=dict(title="数值"),
+	updatemenus=updatemenus,
+	legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+)
+
+fig = go.Figure(data=traces, layout=layout)
+
+# 输出为HTML
+pio.write_html(fig, file="weather_trend_interactive.html", auto_open=True)

@@ -2,7 +2,9 @@
 # 动态多小行星雷达图（Plotly实现，支持交互和动画）
 import pandas as pd
 import numpy as np
+
 import plotly.graph_objects as go
+import plotly.io as pio
 import os
 
 # 读取数据
@@ -114,5 +116,55 @@ fig = go.Figure(data=data, layout=layout, frames=frames)
 # 保存为HTML并自动打开
 import plotly.io as pio
 import webbrowser
+
+# 读取观测数据并生成表格
 html_path = os.path.join(os.path.dirname(__file__), 'asteroid_radar_chart.html')
-pio.write_html(fig, file=html_path, auto_open=True)
+obs_file = os.path.join(os.path.dirname(__file__), '2025RZ4_observations.csv')
+if os.path.exists(obs_file):
+	obs_df = pd.read_csv(obs_file)
+	obs_df['date'] = obs_df['Date_UT'].str.extract(r'2025\-(09-\d+)')[0]
+	day_map = {'09-15': '9.15', '09-16': '9.16', '09-17': '9.17'}
+	obs_df['day'] = obs_df['date'].map(day_map)
+	tables = {}
+	# 全部数据表
+	all_df = obs_df.copy()
+	tables['全部'] = go.Table(
+		header=dict(values=list(all_df.columns[:-2]), fill_color='#222', font=dict(color='gold', size=14), align='center'),
+		cells=dict(values=[all_df[c] for c in all_df.columns[:-2]], fill_color='#181c25', font=dict(color='white', size=12), align='center')
+	)
+	for day in ['9.15', '9.16', '9.17']:
+		day_df = obs_df[obs_df['day'] == day]
+		tables[day] = go.Table(
+			header=dict(values=list(day_df.columns[:-2]), fill_color='#222', font=dict(color='gold', size=14), align='center'),
+			cells=dict(values=[day_df[c] for c in day_df.columns[:-2]], fill_color='#181c25', font=dict(color='white', size=12), align='center')
+		)
+	# 生成切换按钮的JS
+	html = '''<html><head><meta charset="utf-8"><title>小行星可视化</title>
+	<script src="https://cdn.plot.ly/plotly-2.30.0.min.js"></script></head>
+	<body style="background:#181c25; color:#fff;">
+	<h2 style="color:gold;">小行星轨道参数动态雷达图</h2>''' + pio.to_html(fig, include_plotlyjs=False, full_html=False) + '''
+		<h2 style="color:gold;">2025 RZ4 观测数据表</h2>
+		<div style="text-align:center; margin:24px 0 12px 0;">
+			<button style="background:#636EFA;color:#fff;border:none;padding:8px 18px;margin:0 8px;border-radius:6px;font-size:16px;cursor:pointer;" onclick="showTable('全部')">全部</button>
+			<button style="background:#EF553B;color:#fff;border:none;padding:8px 18px;margin:0 8px;border-radius:6px;font-size:16px;cursor:pointer;" onclick="showTable('9.15')">9.15</button>
+			<button style="background:#00CC96;color:#fff;border:none;padding:8px 18px;margin:0 8px;border-radius:6px;font-size:16px;cursor:pointer;" onclick="showTable('9.16')">9.16</button>
+			<button style="background:#FFA15A;color:#fff;border:none;padding:8px 18px;margin:0 8px;border-radius:6px;font-size:16px;cursor:pointer;" onclick="showTable('9.17')">9.17</button>
+		</div>
+		<div id="table-container"></div>
+	<script>
+	var tables = {};
+	'''
+	for day in ['全部', '9.15', '9.16', '9.17']:
+		html += f"tables['{day}'] = `{pio.to_html(go.Figure(data=[tables[day]]), include_plotlyjs=False, full_html=False)}`;\n"
+	html += '''
+	function showTable(day) {
+	  document.getElementById('table-container').innerHTML = tables[day];
+	  Plotly.Plots.resize('table-container');
+	}
+	showTable('全部');
+	</script></body></html>'''
+	with open(html_path, 'w', encoding='utf-8') as f:
+		f.write(html)
+	webbrowser.open('file://' + html_path)
+else:
+	pio.write_html(fig, file=html_path, auto_open=True)
