@@ -13,11 +13,18 @@ df = pd.read_csv(file)
 labels = ['inclination', 'eccentricity', 'semimajor_axis', 'delta_v', 'H']
 num_vars = len(labels)
 
+
 # 颜色列表
 color_list = [
 	'#636EFA', '#EF553B', '#00CC96', '#AB63FA', '#FFA15A',
 	'#19D3F3', '#FF6692', '#B6E880', '#FF97FF', '#FECB52'
 ]
+
+# HEX转RGBA
+def hex_to_rgba(hex_color, alpha=0.3):
+	import matplotlib.colors as mcolors
+	rgb = mcolors.to_rgb(hex_color)
+	return f'rgba({int(rgb[0]*255)},{int(rgb[1]*255)},{int(rgb[2]*255)},{alpha})'
 
 # 闭合雷达图
 def close_vals(vals):
@@ -38,8 +45,11 @@ for step in range(1, max_steps+1):
 			theta=labels + [labels[0]],
 			mode='lines+markers',
 			name=row['name'],
-			line=dict(color=color_list[idx % len(color_list)], width=3),
-			marker=dict(size=8),
+			line=dict(color=color_list[idx % len(color_list)], width=5),
+			marker=dict(size=12, color=color_list[idx % len(color_list)], line=dict(width=2, color='#fff')),
+		fill='toself',
+		fillcolor=hex_to_rgba(color_list[idx % len(color_list)], 0.3),  # 半透明填充
+		opacity=0.85,
 			hovertemplate='<b>%{text}</b><br>%{theta}: %{r:.2f}',
 			text=[row['name']] * (num_vars+1)
 		))
@@ -56,8 +66,11 @@ for idx, row in df.iterrows():
 		theta=labels + [labels[0]],
 		mode='lines+markers',
 		name=row['name'],
-		line=dict(color=color_list[idx % len(color_list)], width=3),
-		marker=dict(size=8),
+		line=dict(color=color_list[idx % len(color_list)], width=5),
+		marker=dict(size=12, color=color_list[idx % len(color_list)], line=dict(width=2, color='#fff')),
+	fill='toself',
+	fillcolor=hex_to_rgba(color_list[idx % len(color_list)], 0.3),  # 半透明填充
+	opacity=0.85,
 		hovertemplate='<b>%{text}</b><br>%{theta}: %{r:.2f}',
 		text=[row['name']] * (num_vars+1)
 	))
@@ -65,11 +78,31 @@ for idx, row in df.iterrows():
 # 布局
 layout = go.Layout(
 	title='小行星轨道参数动态雷达图',
+	paper_bgcolor='#181c25',
+	plot_bgcolor='#222',
+	font=dict(color='#fff', size=18),
 	polar=dict(
-		radialaxis=dict(visible=True, showticklabels=True, ticks='outside', linewidth=2)
+		bgcolor='#222',
+		radialaxis=dict(
+			visible=True,
+			showticklabels=True,
+			ticks='outside',
+			linewidth=2,
+			gridcolor='#444',
+			gridwidth=2,
+			linecolor='#888',
+			tickfont=dict(color='#FECB52', size=14)
+		),
+		angularaxis=dict(
+			linewidth=2,
+			gridcolor='#444',
+			gridwidth=2,
+			linecolor='#888',
+			tickfont=dict(color='#19D3F3', size=14)
+		)
 	),
 	showlegend=True,
-	legend=dict(x=1.05, y=1),
+	legend=dict(x=1.05, y=1, bgcolor='#181c25', bordercolor='#444', borderwidth=1),
 	updatemenus=[dict(
 		type='buttons',
 		showactive=False,
