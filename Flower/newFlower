@@ -1,0 +1,25 @@
+import pandas as pd
+import plotly.express as px
+
+# 读取你的 iris 数据
+df = pd.read_csv("iris.csv")
+
+# 按 Species 取均值
+df_mean = df.groupby("Species").mean().reset_index()
+
+# 转换为雷达图长格式
+df_melt = df_mean.melt(id_vars="Species", 
+                       value_vars=["SepalLengthCm", "SepalWidthCm", "PetalLengthCm", "PetalWidthCm"],
+                       var_name="Feature", value_name="Value")
+
+# 绘制线性玫瑰花风格雷达图
+fig = px.line_polar(df_melt, 
+                    r="Value", 
+                    theta="Feature", 
+                    color="Species", 
+                    line_close=True,
+                    color_discrete_sequence=px.colors.qualitative.Set2)
+
+fig.update_traces(fill='toself', opacity=0.6)  # 填充让它更像花瓣
+fig.show()
+
