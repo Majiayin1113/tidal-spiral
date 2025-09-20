@@ -31,10 +31,16 @@ def create_app():
     app = dash.Dash(__name__)
     app.title = 'Iris Explorer'
 
+    # User-provided palette
+    PALETTE = ['#B2EDFC', '#59A1D5', '#6973A7', '#969BB8', '#2C497B']
+    # Map species to the first three palette colors to make changes obvious
+    species_list = sorted(df['Species'].unique())
+    COLOR_MAP = {species_list[i]: PALETTE[i] for i in range(min(len(species_list), len(PALETTE)))}
+
     species_options = [{'label': s, 'value': s} for s in sorted(df['Species'].unique())]
 
     app.layout = html.Div([
-        html.H2('Iris Dataset Explorer', style={'textAlign':'center'}),
+        html.H2('Iris Dataset Explorer', style={'textAlign':'center', 'color':'white'}),
         html.Div([
             html.Div([
                 html.Label('Species'),
@@ -43,22 +49,26 @@ def create_app():
             ], style={'width':'60%', 'display':'inline-block', 'verticalAlign':'top'}),
 
             html.Div([
-                html.Label('Data Table'),
-                dash_table.DataTable(
-                    id='table',
-                    columns=[{'name':c, 'id':c} for c in df.columns],
-                    data=df.to_dict('records'),
-                    page_size=15,
-                    filter_action='native',
-                    sort_action='native',
-                    row_selectable='multi',
-                    selected_rows=[],
-                    style_table={'height':'600px', 'overflowY':'auto'},
-                    style_cell={'textAlign':'left', 'minWidth':'100px', 'whiteSpace':'normal'}
-                )
+                html.Label('Distribution (Rose Chart)'),
+                html.Div([
+                    html.Label('Group by', style={'marginRight':'8px'}),
+                    dcc.Dropdown(
+                        id='group-by',
+                        options=[
+                            {'label':'Species', 'value':'Species'},
+                            {'label':'SepalLength (bins)', 'value':'SepalLength'},
+                            {'label':'SepalWidth (bins)', 'value':'SepalWidth'}
+                        ],
+                        value='Species',
+                        clearable=False,
+                        style={'width':'70%'}
+                    )
+                ], style={'display':'flex', 'alignItems':'center', 'marginBottom':'8px'}),
+
+                dcc.Graph(id='rose-chart')
             ], style={'width':'38%', 'display':'inline-block', 'paddingLeft':'2%'}),
         ], style={'padding':'10px 20px'})
-    ], style={'fontFamily':'Arial', 'backgroundColor':'white'})
+    ], style={'fontFamily':'Arial', 'backgroundColor':'black', 'color':'white', 'height':'100vh'})
 
     @app.callback(
         Output('scatter', 'figure'),
@@ -66,17 +76,91 @@ def create_app():
     )
     def update_scatter(selected_species):
         dff = df[df['Species'].isin(selected_species)]
+        # use explicit color map for species so colors are predictable
+        # Create layered scatter to simulate a glow: larger pale markers under smaller solid markers
         fig = px.scatter(dff, x='SepalLengthCm', y='SepalWidthCm', color='Species', hover_data=['Id'],
-                         title=f'Sepal Length vs Width ({len(dff)} rows)')
+                         title=f'Sepal Length vs Width ({len(dff)} rows)',
+                         color_discrete_map=COLOR_MAP,
+                         template='plotly_dark')
+
+        # Update marker styling for glow: add outline and slightly larger trace behind each species
+        for trace in fig.data:
+            # main marker
+            trace.marker.line.width = 1
+            trace.marker.line.color = 'rgba(0,0,0,0.6)'
+            trace.marker.size = 10
+            # emulate glow by adding a faint larger marker using marker.symbol and opacity
+            # Plotly traces do not support two marker sizes per-trace easily; instead increase 'marker.opacity' slightly
+            trace.marker.opacity = 0.95
+
+        fig.update_layout(paper_bgcolor='black', plot_bgcolor='black', font_color='white')
+        fig.update_xaxes(showgrid=True, gridcolor='rgba(255,255,255,0.07)', zeroline=False, color='white')
+        fig.update_yaxes(showgrid=True, gridcolor='rgba(255,255,255,0.07)', zeroline=False, color='white')
         return fig
 
     @app.callback(
-        Output('table', 'data'),
-        Input('species-filter', 'value')
+        Output('rose-chart', 'figure'),
+        [Input('species-filter', 'value'), Input('group-by', 'value')]
     )
-    def update_table(selected_species):
+    def update_rose(selected_species, group_by):
         dff = df[df['Species'].isin(selected_species)]
-        return dff.to_dict('records')
+
+        if group_by == 'Species':
+            counts = dff['Species'].value_counts().sort_index()
+            categories = counts.index.tolist()
+            values = counts.values.tolist()
+            theta = categories
+        else:
+            # create bins for numeric columns
+            if group_by == 'SepalLength':
+                col = 'SepalLengthCm'
+            else:
+                col = 'SepalWidthCm'
+
+            bins = 6
+            labels = []
+            dff['bin'] = pd.cut(dff[col], bins=bins)
+            counts = dff['bin'].value_counts().sort_index()
+            categories = [str(i) for i in counts.index]
+            values = counts.values.tolist()
+            theta = categories
+
+        # polar bar (rose) chart
+        theta = [str(c) for c in categories]
+        if group_by == 'Species':
+            fig = px.bar_polar(
+                r=values,
+                theta=theta,
+                color=theta,
+                template='plotly_dark',
+                color_discrete_map=COLOR_MAP
+            )
+        else:
+            color_seq = PALETTE * ((len(values) // len(PALETTE)) + 1)
+            fig = px.bar_polar(
+                r=values,
+                theta=theta,
+                color=theta,
+                template='plotly_dark',
+                color_discrete_sequence=color_seq
+            )
+
+        # Make bars have a subtle glow by increasing alpha and adding a thin white edge
+        for t in fig.data:
+            if hasattr(t, 'marker'):
+                # slightly translucent fill
+                t.marker.opacity = 0.9
+                # add thin edge
+                try:
+                    t.marker.line = dict(color='rgba(255,255,255,0.12)', width=1)
+                except Exception:
+                    pass
+
+        fig.update_layout(title=f'Distribution by {group_by} (n={len(dff)})', showlegend=False,
+                          paper_bgcolor='black', plot_bgcolor='black', font_color='white')
+        fig.update_traces(selector=dict(type='barpolar'))
+        return fig
+        return fig
 
     return app
 
