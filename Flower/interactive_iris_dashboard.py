@@ -13,6 +13,7 @@ Open: http://localhost:8051
 import pandas as pd
 import plotly.express as px
 import dash
+import numpy as np
 from dash import dcc, html, Input, Output, State
 from dash import dash_table
 import os
@@ -28,7 +29,9 @@ def load_data(path=CSV_PATH):
 
 def create_app():
     df = load_data()
-    app = dash.Dash(__name__)
+    # serve the Dash app under the path /iris/
+    prefix = '/iris/'
+    app = dash.Dash(__name__, requests_pathname_prefix=prefix)
     app.title = 'Iris Explorer'
 
     # User-provided palette
@@ -45,7 +48,9 @@ def create_app():
             html.Div([
                 html.Label('Species'),
                 dcc.Dropdown(id='species-filter', options=species_options, value=[o['value'] for o in species_options], multi=True),
-                dcc.Graph(id='scatter', clear_on_unhover=True)
+                dcc.Graph(id='scatter', clear_on_unhover=True),
+                html.Div([html.Label('Animated Scatter')], style={'marginTop':'8px'}),
+                dcc.Graph(id='animated-scatter')
             ], style={'width':'60%', 'display':'inline-block', 'verticalAlign':'top'}),
 
             html.Div([
@@ -162,9 +167,69 @@ def create_app():
         return fig
         return fig
 
+    @app.callback(
+        Output('animated-scatter', 'figure'),
+        Input('species-filter', 'value')
+    )
+    def update_animated(selected_species):
+        dff = df[df['Species'].isin(selected_species)]
+        # build base fig
+        base = px.scatter(dff, x='SepalLengthCm', y='SepalWidthCm', color='Species',
+                          color_discrete_map=COLOR_MAP, template='plotly_dark')
+        # create frames that pulse marker sizes
+        frames = []
+        steps = 20
+        for t in range(steps):
+            scale = 1.0 + 0.3 * np.sin(2 * np.pi * (t / steps))
+            # update sizes per point
+            frame_data = []
+            for sp in sorted(dff['Species'].unique()):
+                sub = dff[dff['Species'] == sp]
+                frame_data.append({
+                    'type': 'scatter',
+                    'x': sub['SepalLengthCm'].tolist(),
+                    'y': sub['SepalWidthCm'].tolist(),
+                    'marker': {'size': [10 * scale] * len(sub), 'color': COLOR_MAP.get(sp)},
+                    'mode': 'markers'
+                })
+            frames.append({'data': frame_data, 'name': str(t)})
+
+        animated = base
+        animated.frames = frames
+        # add play button
+        animated.update_layout(
+            updatemenus=[{
+                'type': 'buttons',
+                'showactive': False,
+                'buttons': [{
+                    'label': 'Play',
+                    'method': 'animate',
+                    'args': [None, {'frame': {'duration': 80, 'redraw': True}, 'fromcurrent': True}]
+                }]
+            }],
+            paper_bgcolor='black', plot_bgcolor='black', font_color='white'
+        )
+        return animated
+
     return app
 
 if __name__ == '__main__':
-    app = create_app()
-    print('Starting Iris dashboard at http://localhost:8051')
-    app.run(host='0.0.0.0', port=8051, debug=False)
+        app = create_app()
+        # add a lightweight index page on the Flask server that links to the Dash app
+        @app.server.route('/')
+        def index():
+                return '''
+                <html>
+                    <head><title>Iris Dash Index</title></head>
+                    <body style="background-color:black;color:white;font-family:Arial;">
+                        <h2>Iris Dashboards</h2>
+                        <ul>
+                            <li><a href="/iris/" style="color:#B2EDFC">Interactive Iris Explorer (dark)</a></li>
+                        </ul>
+                    </body>
+                </html>
+                '''
+
+        start_url = 'http://localhost:8051/iris/'
+        print(f'Starting Iris dashboard at {start_url}')
+        app.run(host='0.0.0.0', port=8051, debug=False)
