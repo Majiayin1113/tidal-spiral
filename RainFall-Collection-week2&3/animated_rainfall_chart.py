@@ -66,4 +66,11 @@ def animate(frame):
 
 ani = animation.FuncAnimation(fig, animate, frames=len(years)*len(months), interval=100, repeat=True)
 plt.tight_layout()
-plt.show()
+
+# 保存为GIF
+print("正在生成GIF动画...")
+ani.save('rainfall_animation.gif', writer='pillow', fps=10, dpi=100)
+print("GIF动画已保存为 'rainfall_animation.gif'")
+
+# 如果想要显示动画，取消下面行的注释
+# plt.show()
