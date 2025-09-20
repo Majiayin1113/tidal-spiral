@@ -3,3 +3,4 @@ matplotlib
 requests
 lxml
 python-dotenv
+pillow

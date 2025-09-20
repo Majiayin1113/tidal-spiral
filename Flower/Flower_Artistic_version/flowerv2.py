@@ -21,6 +21,12 @@ from pathlib import Path
 import pygame
 import pandas as pd
 import functools
+from datetime import datetime
+try:
+    from PIL import Image
+    PIL_AVAILABLE = True
+except ImportError:
+    PIL_AVAILABLE = False
 
 # ------------------------------------------------------------------
 # Data loading
@@ -57,23 +63,31 @@ def hex_to_rgb(h: str):
 SPECIES_COLOR_RGB = {k: hex_to_rgb(v) for k,v in SPECIES_COLOR.items()}
 ACCENTS_RGB = [hex_to_rgb(c) for c in ACCENTS]
 
+def lighten(rgb, amount: float):
+    """Lighten an RGB tuple toward white by amount (0-1)."""
+    r,g,b = rgb
+    return tuple(min(255, int(c + (255-c)*amount)) for c in (r,g,b))
+
 # ------------------------------------------------------------------
 # Global effect state
 # ------------------------------------------------------------------
 EFFECTS = {'trails': True, 'glow': True, 'background': True, 'morph': False, 'bubbles': True, 'mandala': False}
 EFFECT_INTENSITY = 1.0
-GLOBAL_ZOOM = 1.3
-ZOOM_MIN, ZOOM_MAX = 0.5, 3.2
+GLOBAL_ZOOM = 1.4
+ZOOM_MIN, ZOOM_MAX = 0.5, 4.5
+# exaggeration master scalar for size / petal count / noise amplitude
+EXAGGERATION = 1.25
 
 VARIANT_ID = 0
 def random_variant():
+    # wider range for more dramatic variety
     return {
-        'length_mul': random.uniform(0.85, 1.45),
-        'width_mul': random.uniform(0.75, 1.40),
-        'petal_mul': random.uniform(0.80, 1.60),
-        'jitter_mul': random.uniform(0.70, 1.90),
-        'hue_shift': random.uniform(-0.18, 0.18),
-        'pulse_mul': random.uniform(0.85, 1.35)
+        'length_mul': random.uniform(0.75, 1.75),
+        'width_mul': random.uniform(0.60, 1.70),
+        'petal_mul': random.uniform(0.70, 2.10),
+        'jitter_mul': random.uniform(0.60, 2.40),
+        'hue_shift': random.uniform(-0.28, 0.28),
+        'pulse_mul': random.uniform(0.70, 1.60)
     }
 CURRENT_VARIANT = random_variant()
 
@@ -129,16 +143,103 @@ def draw_petal(surface, center, angle_deg, length, width, color, alpha=200):
     pos = (center[0] + math.cos(ang)*offset - w/2, center[1] - math.sin(ang)*offset - h/2)
     surface.blit(rotated,pos)
 
+def draw_cycle_icon(surface, rect, active_species_color, hover=False):
+    # simple circular arrows icon + central dot color-coded to current species
+    bg = (35,35,55,180)
+    icon_surf = pygame.Surface(rect.size, pygame.SRCALPHA)
+    pygame.draw.rect(icon_surf, bg, icon_surf.get_rect(), border_radius=8)
+    border_col = (150,150,210) if not hover else (200,200,255)
+    pygame.draw.rect(icon_surf, border_col, icon_surf.get_rect(), width=2, border_radius=8)
+    w,h = rect.size; cx,cy = w//2, h//2
+    radius = min(w,h)//2 - 6
+    # arrow circle
+    pygame.draw.circle(icon_surf, (90,90,150), (cx,cy), radius, width=2)
+    # two small arrow heads
+    ah = 6
+    pygame.draw.polygon(icon_surf, (90,90,150), [(cx+radius-4, cy-3), (cx+radius+ah-4, cy), (cx+radius-4, cy+3)])
+    pygame.draw.polygon(icon_surf, (90,90,150), [(cx-radius+4, cy+3), (cx-radius-ah+4, cy), (cx-radius+4, cy-3)])
+    # center dot with current species color
+    pygame.draw.circle(icon_surf, active_species_color, (cx,cy), 5)
+    surface.blit(icon_surf, rect.topleft)
+
+def draw_compact_hud(surface, mode, variant_id, zoom, intensity, effects):
+    # simplified bottom-left (remove effect toggles as requested)
+    font_small = pygame.font.SysFont(None, 16)
+    pad = 6
+    lines = [f"{mode.upper()}  V{variant_id}", f"Z:{zoom:.2f} I:{intensity:.2f}"]
+    rendered = [font_small.render(l, True, (230,230,235)) for l in lines]
+    w = max(r.get_width() for r in rendered) + pad*2
+    h = sum(r.get_height() for r in rendered) + pad*2 + (len(rendered)-1)*2
+    box = pygame.Surface((w,h), pygame.SRCALPHA)
+    pygame.draw.rect(box,(20,20,32,170), box.get_rect(), border_radius=8)
+    pygame.draw.rect(box,(90,90,140), box.get_rect(), width=2, border_radius=8)
+    cy = pad
+    for r in rendered:
+        box.blit(r,(pad,cy))
+        cy += r.get_height()+2
+    surface.blit(box,(10, HEIGHT - h - 10))
+
+def draw_stats_panel(surface, stats_dict, current_mode, variant_id):
+    # right side panel with PetalLengthCm & PetalWidthCm per species
+    font_title = pygame.font.SysFont(None, 18)
+    font_row = pygame.font.SysFont(None, 16)
+    pad = 8
+    species_names = list(stats_dict.keys())
+    headers = ['Species','PetalL','PetalW']
+    rows = []
+    for sp in species_names:
+        st = stats_dict[sp]
+        rows.append((sp, f"{st['PetalLengthCm']:.2f}", f"{st['PetalWidthCm']:.2f}"))
+    # measure widths
+    col_widths = [0,0,0]
+    all_rows = [headers] + rows
+    font_measure = font_row
+    for r in all_rows:
+        for ci,val in enumerate(r):
+            w = font_measure.render(val, True, (0,0,0)).get_width()
+            if w > col_widths[ci]: col_widths[ci] = w
+    table_w = sum(col_widths) + pad*2 + 12
+    title = f"Mode:{current_mode} V{variant_id}"
+    title_surf = font_title.render(title, True, (240,240,250))
+    row_height = font_row.get_height()+2
+    table_h = title_surf.get_height() + 6 + (row_height)*(len(rows)+1) + pad*2
+    x = WIDTH - table_w - 15
+    y = 20
+    panel = pygame.Surface((table_w, table_h), pygame.SRCALPHA)
+    pygame.draw.rect(panel, (25,25,40,180), panel.get_rect(), border_radius=10)
+    pygame.draw.rect(panel, (110,110,170), panel.get_rect(), width=2, border_radius=10)
+    panel.blit(title_surf,(pad, pad))
+    y_cursor = pad + title_surf.get_height() + 4
+    # header
+    header_color = (200,200,220)
+    x_cursor = pad
+    for ci,val in enumerate(headers):
+        txt = font_row.render(val, True, header_color)
+        panel.blit(txt,(x_cursor, y_cursor))
+        x_cursor += col_widths[ci] + 6
+    y_cursor += row_height
+    # rows
+    for (sp,pl,pw) in rows:
+        x_cursor = pad
+        active = (sp == current_mode)
+        for ci,val in enumerate((sp,pl,pw)):
+            col_col = (255,230,150) if active else (220,220,230)
+            txt = font_row.render(val, True, col_col)
+            panel.blit(txt,(x_cursor, y_cursor))
+            x_cursor += col_widths[ci] + 6
+        y_cursor += row_height
+    surface.blit(panel,(x,y))
+
 def draw_flower(surface, center, stats, color_rgb, time_t, petals_base=8, scale=1.0, jitter=0.0):
     v = CURRENT_VARIANT
-    base_len = stats['PetalLengthCm'] * 13.5
-    base_wid = stats['PetalWidthCm'] * 8.5
-    noise_factor = 0.25
-    petal_length = base_len * scale * (0.9 + 0.15*math.sin(time_t*0.7)) * v['length_mul']
-    petal_width  = base_wid * scale * (0.9 + 0.10*math.cos(time_t*0.9)) * v['width_mul']
+    base_len = stats['PetalLengthCm'] * 15.0 * EXAGGERATION
+    base_wid = stats['PetalWidthCm'] * 9.5 * EXAGGERATION
+    noise_factor = 0.32 * EXAGGERATION
+    petal_length = base_len * scale * (0.9 + 0.20*math.sin(time_t*0.7)) * v['length_mul']
+    petal_width  = base_wid * scale * (0.9 + 0.15*math.cos(time_t*0.9)) * v['width_mul']
     # apply radial noise modulation
     sepal_factor = (stats['SepalLengthCm'] + stats['SepalWidthCm'])/2.0
-    n_petals = min(220, int((petals_base + sepal_factor*1.2 + (math.sin(time_t*0.6)+1)*3) * v['petal_mul']))
+    n_petals = min(300, int((petals_base + sepal_factor*1.6 + (math.sin(time_t*0.55)+1)*4) * v['petal_mul'] * (0.85 + EXAGGERATION*0.55)))
     core_r = int(7 + sepal_factor*3.3*scale)
     rotation = (time_t * 22) % 360
     pulse = (1.0 + 0.08*math.sin(time_t*2.3)) * v['pulse_mul']
@@ -150,18 +251,30 @@ def draw_flower(surface, center, stats, color_rgb, time_t, petals_base=8, scale=
     base_color = tuple(int(c*255) for c in colorsys.hls_to_rgb(h_shift, l_mod, s_mod))
     for i in range(max(1,n_petals)):
         angle = i * (360.0 / n_petals) + rotation
-        jitter_angle = (random.random()-0.5) * jitter * 8.0 * v['jitter_mul']
+        jitter_angle = (random.random()-0.5) * jitter * 10.0 * v['jitter_mul'] * EXAGGERATION
         # noise distort length & width subtly per petal index and time
-        # noise: feed scaled indices (no scale kw in value_noise)
         nval = value_noise(i*0.6, angle*0.03, time_t*0.5)
         length_variation = petal_length * (0.70 + 0.30*math.sin(time_t*0.9 + i*0.8) + nval*noise_factor*0.2)
         width_variation  = petal_width  * (0.75 + 0.25*math.cos(time_t*1.0 + i*1.15) + nval*noise_factor*0.15)
-        angle += nval * 10 * noise_factor
+        angle += (nval * 12 * noise_factor) + jitter_angle
         alpha = int(160 + 80*math.sin(time_t*1.4 + i*0.7 + nval*0.5))
         local_shift = (h_shift + 0.03*math.sin(i*0.9 + time_t*0.5) + nval*0.05) % 1.0
         lr,lg,lb = colorsys.hls_to_rgb(local_shift, l_mod, s_mod)
         local_color = (int(lr*255), int(lg*255), int(lb*255))
         draw_petal(surface, center, angle, length_variation*pulse, max(2,width_variation), local_color, alpha)
+    # outer translucent halo petals for exaggeration
+    halo_layers = 2
+    halo_color = base_color
+    for hl in range(halo_layers):
+        spread = 1.15 + hl*0.18
+        alpha_h = int(60 - hl*18)
+        if alpha_h <= 0: continue
+        for i in range(0, n_petals, 2):
+            ang = i * (360.0 / n_petals) + rotation*0.8 + hl*7
+            nval = value_noise(i*0.4, ang*0.02, time_t*0.35)
+            lv = petal_length * (0.9 + 0.1*nval) * spread
+            wv = petal_width * (0.9 + 0.08*nval) * spread
+            draw_petal(surface, center, ang, lv, max(2,wv), halo_color, alpha_h)
     # Removed inner concentric circles per user request (中心的两层圆圈不要)
     # (Previously drew accent outer, darker inner, and pulsing ring.)
     # bubble aura
@@ -189,13 +302,29 @@ def main():
     fps = 30
     mode = 'all'
     species_order = ['setosa','versicolor','virginica']
-    # button to cycle single-species mode
-    button_rect = pygame.Rect(15,15,130,32)
-    current_species_index = 0  # used when in button-controlled single mode
+    # species name buttons (left top)
+    button_height = 30
+    button_padding = 8
+    species_buttons = []
+    x_cursor = 15
+    for sp in species_order:
+        label_w = 90
+        rect = pygame.Rect(x_cursor, 15, label_w, button_height)
+        species_buttons.append((sp, rect))
+        x_cursor += label_w + button_padding
+    current_species_index = 0  # maintain for cycling logic if needed
     centers_all = [(WIDTH//4, HEIGHT//2), (WIDTH//2, HEIGHT//2), (3*WIDTH//4, HEIGHT//2)]
     morph_phase = 0.0
     morph_speed = 0.2
     morph_target_index = 0
+    # GIF capture state
+    capturing = False
+    capture_frames = []
+    capture_max = 180  # about 6 seconds at 30fps
+    capture_scale = 0.6  # downscale to reduce size
+    capture_every = 1    # frame stride
+    frame_counter = 0
+    gif_last_saved = None
 
     while running:
         dt = clock.tick(fps)/1000.0
@@ -220,17 +349,55 @@ def main():
                 elif k == pygame.K_f: EFFECTS['mandala']=not EFFECTS['mandala']
                 elif k in (pygame.K_PLUS, pygame.K_EQUALS): EFFECT_INTENSITY = min(2.0, EFFECT_INTENSITY+0.1)
                 elif k == pygame.K_MINUS: EFFECT_INTENSITY = max(0.5, EFFECT_INTENSITY-0.1)
+                elif k == pygame.K_h:
+                    if not PIL_AVAILABLE:
+                        print("Pillow not installed; can't capture GIF.")
+                    else:
+                        capturing = not capturing
+                        if capturing:
+                            capture_frames.clear(); frame_counter = 0
+                            print("[GIF] Capture started (H to stop, S to save early).")
+                        else:
+                            # auto save when stopping
+                            if capture_frames:
+                                ts = datetime.now().strftime('%Y%m%d_%H%M%S')
+                                out_path = HERE / f"flower_capture_{ts}.gif"
+                                try:
+                                    capture_frames[0].save(out_path, save_all=True, append_images=capture_frames[1:], loop=0, duration=33, disposal=2)
+                                    print(f"[GIF] Saved {out_path}")
+                                    gif_last_saved = out_path
+                                except Exception as e:
+                                    print("[GIF] Save failed:", e)
+                elif k == pygame.K_s:
+                    # manual save without toggling capture
+                    if capturing and capture_frames:
+                        capturing = False
+                        ts = datetime.now().strftime('%Y%m%d_%H%M%S')
+                        out_path = HERE / f"flower_capture_{ts}.gif"
+                        try:
+                            capture_frames[0].save(out_path, save_all=True, append_images=capture_frames[1:], loop=0, duration=33, disposal=2)
+                            print(f"[GIF] Saved {out_path}")
+                            gif_last_saved = out_path
+                        except Exception as e:
+                            print("[GIF] Save failed:", e)
             elif event.type == pygame.MOUSEBUTTONDOWN:
                 if event.button == 1:  # left
                     mx,my = event.pos
-                    # button click detection (always active)
-                    if button_rect.collidepoint(mx,my):
-                        # switch to single-species mode and advance
-                        current_species_index = (current_species_index + 1) % len(species_order)
-                        mode = species_order[current_species_index]
-                        EFFECTS['morph'] = False
-                        CURRENT_VARIANT = random_variant(); VARIANT_ID += 1
-                        continue  # skip other left-click logic
+                    # species name buttons detection
+                    clicked_button = False
+                    for sp,rect in species_buttons:
+                        if rect.collidepoint(mx,my):
+                            if mode == sp:
+                                # if already that species -> go back to all
+                                mode = 'all'
+                            else:
+                                mode = sp
+                            EFFECTS['morph'] = False
+                            CURRENT_VARIANT = random_variant(); VARIANT_ID += 1
+                            clicked_button = True
+                            break
+                    if clicked_button:
+                        continue
                     if mode == 'all':
                         for i,c in enumerate(centers_all):
                             if abs(mx-c[0]) < WIDTH//8:
@@ -318,7 +485,7 @@ def main():
                 target_stats = species_stats[species_list[morph_target_index]]
                 current_stats = lerp_dict(base_stats, target_stats, morph_phase)
             color = SPECIES_COLOR_RGB[mode]
-            draw_flower(trail_surface if EFFECTS['trails'] else screen, (WIDTH//2, HEIGHT//2), current_stats, color, t, petals_base=12, scale=1.6*GLOBAL_ZOOM, jitter=1.4*EFFECT_INTENSITY)
+            draw_flower(trail_surface if EFFECTS['trails'] else screen, (WIDTH//2, HEIGHT//2), current_stats, color, t, petals_base=14, scale=2.1*GLOBAL_ZOOM*EXAGGERATION, jitter=1.6*EFFECT_INTENSITY)
 
         # Glow composite
         if EFFECTS['trails']:
@@ -331,26 +498,71 @@ def main():
 
         # HUD
         font = pygame.font.SysFont(None, 20)
-        # draw species cycle button
-        btn_color_bg = (40,40,60)
-        pygame.draw.rect(screen, btn_color_bg, button_rect, border_radius=6)
-        pygame.draw.rect(screen, (120,120,180), button_rect, width=2, border_radius=6)
-        btn_label = '切换花朵'  # Chinese: switch flower
-        # show current species short label
-        if mode == 'all':
-            show_sp = 'All'
-        else:
-            show_sp = mode
-        btn_text = font.render(f"{btn_label}:{show_sp}", True, (235,235,240))
-        screen.blit(btn_text, (button_rect.x+8, button_rect.y+7))
-        hud_lines = [
-            f"Mode:{mode}  Click(all)=select  Click(single)=variant  Shift+Click=cycle  Mandala(F):{EFFECTS['mandala']}",
-            f"T:{EFFECTS['trails']} G:{EFFECTS['glow']} Bk:{EFFECTS['background']} M:{EFFECTS['morph']} Bub(P):{EFFECTS['bubbles']} Int:{EFFECT_INTENSITY:.2f}",
-            f"Zoom:{GLOBAL_ZOOM:.2f} Variant:{VARIANT_ID} RightClick=new variant"
-        ]
-        for i,line in enumerate(hud_lines):
-            txt = font.render(line, True, (235,235,235))
-            screen.blit(txt,(10, HEIGHT-20*(len(hud_lines)-i)))
+        # draw species buttons
+        mouse_pos = pygame.mouse.get_pos()
+        for sp,rect in species_buttons:
+            is_active = (mode == sp)
+            hovered = rect.collidepoint(mouse_pos)
+            base_species_col = SPECIES_COLOR_RGB.get(sp, (80,80,110))
+            if not is_active:
+                # default black base, brighten on hover
+                if hovered:
+                    bg_col = lighten((0,0,0), 0.45)
+                else:
+                    bg_col = (0,0,0)
+            else:
+                # active uses species color lightened
+                bg_col = lighten(base_species_col, 0.70)
+                if hovered:
+                    bg_col = lighten(base_species_col, 0.85)
+            pygame.draw.rect(screen, bg_col, rect, border_radius=8)
+            border_col = lighten(base_species_col, 0.9 if is_active else (0.65 if hovered else 0.5))
+            pygame.draw.rect(screen, border_col, rect, width=2, border_radius=8)
+            label_text = sp
+            txt_color = (250,250,255) if hovered or is_active else (235,235,240)
+            txt = font.render(label_text, True, txt_color)
+            screen.blit(txt, (rect.x + (rect.width - txt.get_width())//2, rect.y + (rect.height - txt.get_height())//2))
+        # small ALL toggle indicator (click species again returns to all so just display)
+        all_status = 'ALL' if mode=='all' else ' ' 
+        all_txt = font.render(all_status, True, (180,180,190))
+        screen.blit(all_txt, (species_buttons[-1][1].right + 10, 20))
+        # compact HUD bottom-left
+        draw_compact_hud(screen, mode, VARIANT_ID, GLOBAL_ZOOM, EFFECT_INTENSITY, EFFECTS)
+        # right side stats panel
+        draw_stats_panel(screen, species_stats, mode, VARIANT_ID)
+
+        # capture frame if enabled
+        if capturing and PIL_AVAILABLE:
+            frame_counter += 1
+            if frame_counter % capture_every == 0:
+                surf = screen.copy()
+                if capture_scale != 1.0:
+                    scaled = pygame.transform.smoothscale(surf, (int(WIDTH*capture_scale), int(HEIGHT*capture_scale)))
+                else:
+                    scaled = surf
+                mode_str = mode
+                # convert to PIL Image
+                raw_str = pygame.image.tostring(scaled, 'RGB')
+                img = Image.frombytes('RGB', scaled.get_size(), raw_str)
+                capture_frames.append(img)
+                if len(capture_frames) >= capture_max:
+                    capturing = False
+                    ts = datetime.now().strftime('%Y%m%d_%H%M%S')
+                    out_path = HERE / f"flower_capture_{ts}.gif"
+                    try:
+                        capture_frames[0].save(out_path, save_all=True, append_images=capture_frames[1:], loop=0, duration=33, disposal=2)
+                        print(f"[GIF] Auto-saved (max frames) {out_path}")
+                        gif_last_saved = out_path
+                    except Exception as e:
+                        print("[GIF] Save failed:", e)
+        # overlay capture status (small)
+        if PIL_AVAILABLE:
+            cap_font = pygame.font.SysFont(None, 16)
+            status = "CAPTURE: ON" if capturing else "CAPTURE: OFF (H start)"
+            if not PIL_AVAILABLE:
+                status = "Pillow missing: pip install pillow"
+            cap_txt = cap_font.render(status, True, (200,220,255))
+            screen.blit(cap_txt, (10, 10 + 38))
 
         pygame.display.flip()
 
